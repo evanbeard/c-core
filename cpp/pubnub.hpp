@@ -11,9 +11,9 @@
  */
 
 
-//extern "C" {
+extern "C" {
 #include "pubnub_api_types.h"
-//}
+}
 
 namespace pubnub {
     class context;

@@ -2,7 +2,7 @@
 #if !defined INC_PUBNUB_COMMON_HPP
 #define      INC_PUBNUB_COMMON_HPP
 
-//extern "C" {
+extern "C" {
 #include "pubnub_alloc.h"
 #include "pubnub_coreapi.h"
 #include "pubnub_generate_uuid.h"
@@ -10,7 +10,7 @@
 #include "pubnub_ssl.h"
 #include "pubnub_timers.h"
 #include "pubnub_helper.h"
-//}
+}
 
 
 #include <string>
