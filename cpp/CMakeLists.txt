@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.3)
+cmake_minimum_required(VERSION 3.0)
 
 include_directories(. ../core ../posix ../lib)
 link_directories(. ../core ../posix ../lib)
