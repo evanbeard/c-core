@@ -16,12 +16,7 @@
 #include <openssl/ssl.h>
 
 
-
-
-#define HTTP_PORT_STRING "80"
-
-
-static enum pubnub_res resolv_and_connect_wout_SSL(pubnub_t *pb)
+static enum pbpal_resolv_n_connect_result resolv_and_connect_wout_SSL(pubnub_t *pb)
 {
     PUBNUB_LOG_TRACE("resolv_and_connect_wout_SSL\n");
     if (NULL == pb->pal.socket) {
@@ -30,22 +25,22 @@ static enum pubnub_res resolv_and_connect_wout_SSL(pubnub_t *pb)
         pb->pal.socket = BIO_new_connect((char*)origin);
     }
     if (NULL == pb->pal.socket) {
-        return PNR_ADDR_RESOLUTION_FAILED;
+        return pbpal_resolv_resource_failure;
     }
-    BIO_set_conn_port(pb->pal.socket, HTTP_PORT_STRING);
+    BIO_set_conn_port(pb->pal.socket, "http");
     
     BIO_set_nbio(pb->pal.socket, !pb->options.use_blocking_io);
     
     WATCH_ENUM(pb->options.use_blocking_io);
     if (BIO_do_connect(pb->pal.socket) <= 0) {
         if (BIO_should_retry(pb->pal.socket)) {
-            return PNR_STARTED;
+            return pbpal_connect_wouldblock;
         }
         ERR_print_errors_fp(stderr);
         BIO_free_all(pb->pal.socket);
         pb->pal.socket = NULL;
         PUBNUB_LOG_ERROR("BIO_do_connect failed\n");
-        return PNR_ADDR_RESOLUTION_FAILED;
+        return pbpal_connect_failed;
     }
 
     PUBNUB_LOG_TRACE("pb=%p: BIO connected\n", pb);
@@ -54,7 +49,7 @@ static enum pubnub_res resolv_and_connect_wout_SSL(pubnub_t *pb)
         socket_set_rcv_timeout(fd, pb->transaction_timeout_ms);
     }
 
-    return PNR_OK;
+    return pbpal_connect_success;
 }
 
 
@@ -100,8 +95,8 @@ static int add_pubnub_cert(SSL_CTX *sslCtx)
     
     // set certificate to sslCtx
     X509_STORE_add_cert(SSL_CTX_get_cert_store(sslCtx), cert);
-	X509_free(cert);
-
+    X509_free(cert);
+    
     /* In principle, it would be nice to use this instead, if we
        had a way to find out what is the file and/or path
        of the trusted root certificates. It would fix a problem
@@ -119,14 +114,14 @@ static int add_pubnub_cert(SSL_CTX *sslCtx)
 }
 
 
-enum pubnub_res pbpal_resolv_and_connect(pubnub_t *pb)
+enum pbpal_resolv_n_connect_result pbpal_resolv_and_connect(pubnub_t *pb)
 {
     SSL *ssl;
     int rslt;
     char const* origin = PUBNUB_ORIGIN_SETTABLE ? pb->origin : PUBNUB_ORIGIN;
         
     PUBNUB_ASSERT(pb_valid_ctx_ptr(pb));
-    PUBNUB_ASSERT_OPT((pb->state == PBS_IDLE) || (pb->state == PBS_WAIT_DNS));
+    PUBNUB_ASSERT_OPT((pb->state == PBS_IDLE) || (pb->state == PBS_WAIT_CONNECT));
 
     if (!pb->options.useSSL) {
         return resolv_and_connect_wout_SSL(pb);
@@ -138,7 +133,7 @@ enum pubnub_res pbpal_resolv_and_connect(pubnub_t *pb)
         if (NULL == pb->pal.ctx) {
             ERR_print_errors_fp(stderr);
             PUBNUB_LOG_ERROR("pb=%p SSL_CTX_new failed\n", pb);
-            return PNR_ADDR_RESOLUTION_FAILED;
+            return pbpal_resolv_resource_failure;
         }
         PUBNUB_LOG_TRACE("pb=%p: Got SSL_CTX\n", pb);
         add_pubnub_cert(pb->pal.ctx);
@@ -150,34 +145,41 @@ enum pubnub_res pbpal_resolv_and_connect(pubnub_t *pb)
     }
     if (NULL == pb->pal.socket) {
         ERR_print_errors_fp(stderr);
-        SSL_CTX_free(pb->pal.ctx);
-        pb->pal.ctx = NULL;
-        return PNR_ADDR_RESOLUTION_FAILED;
+        return pbpal_resolv_resource_failure;
     }
     
     PUBNUB_LOG_TRACE("pb=%p: Got BIO_new_ssl == %p\n", pb, pb->pal.socket);
     
     BIO_get_ssl(pb->pal.socket, &ssl);
     SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY); /* maybe not auto_retry? */
+    if (pb->pal.session != NULL) {
+        SSL_set_session(ssl, pb->pal.session);
+    }
 
     BIO_set_conn_hostname(pb->pal.socket, origin);
     BIO_set_conn_port(pb->pal.socket, "https");
+    if (pb->pal.ip_timeout && (pb->pal.ip_timeout < time(NULL))) {
+        pb->pal.ip_timeout = 0;
+    }
+    else if (pb->pal.session != NULL) {
+        BIO_set_conn_ip(pb->pal.socket, pb->pal.ip);
+    }
 
     BIO_set_nbio(pb->pal.socket, !pb->options.use_blocking_io);
 
     WATCH_ENUM(pb->options.use_blocking_io);
     if (BIO_do_connect(pb->pal.socket) <= 0) {
+        /* Expire the IP for the next connect */
+        pb->pal.ip_timeout = time(NULL) - 1;
         if (BIO_should_retry(pb->pal.socket)) {
             PUBNUB_LOG_TRACE("BIO_should_retry\n");
-            return PNR_STARTED;
+            return pbpal_connect_wouldblock;
         }
         ERR_print_errors_fp(stderr);
         BIO_free_all(pb->pal.socket);
         pb->pal.socket = NULL;
-        SSL_CTX_free(pb->pal.ctx);
-        pb->pal.ctx = NULL;
         PUBNUB_LOG_ERROR("BIO_do_connect failed\n");
-        return PNR_ADDR_RESOLUTION_FAILED;
+        return pbpal_connect_failed;
     }
 
     PUBNUB_LOG_TRACE("pb=%p: BIO connected\n", pb);
@@ -192,19 +194,39 @@ enum pubnub_res pbpal_resolv_and_connect(pubnub_t *pb)
         ERR_print_errors_fp(stderr);
         BIO_free_all(pb->pal.socket);
         pb->pal.socket = NULL;
-        SSL_CTX_free(pb->pal.ctx);
-        pb->pal.ctx = NULL;
         if (pb->options.fallbackSSL) {
             return resolv_and_connect_wout_SSL(pb);
         }
-        return PNR_CONNECT_FAILED;
+        return pbpal_connect_failed;
     }
 
-    return PNR_OK;
+    PUBNUB_LOG_INFO("SSL session reused: %s\n", SSL_session_reused(ssl) ? "yes" : "no");
+    if (pb->pal.session != NULL) {
+        SSL_SESSION_free(pb->pal.session);
+    }
+    pb->pal.session = SSL_get1_session(ssl);
+    if (0 == pb->pal.ip_timeout) {
+        pb->pal.ip_timeout = SSL_SESSION_get_time(pb->pal.session) + SSL_SESSION_get_timeout(pb->pal.session);
+        memcpy(pb->pal.ip, BIO_get_conn_ip(pb->pal.socket), 4);
+    }
+    PUBNUB_LOG_TRACE("connected to IP: %d.%d.%d.%d\n", pb->pal.ip[0], pb->pal.ip[1], pb->pal.ip[2], pb->pal.ip[3]);
+
+    return pbpal_connect_success;
 }
 
 
-enum pubnub_res pbpal_check_resolv_and_connect(pubnub_t *pb)
+enum pbpal_resolv_n_connect_result pbpal_check_resolv_and_connect(pubnub_t *pb)
+{
+    /* Under OpenSSL, this function should never be called.  Either
+       we're synchrnous and just connected or not, or we're async, in
+       which case, pbpal_check_connect() will be called.
+     */
+    PUBNUB_ASSERT_OPT(pb == NULL);
+    return pbpal_connect_failed;
+}
+
+
+enum pbpal_resolv_n_connect_result pbpal_check_connect(pubnub_t *pb)
 {
     fd_set read_set, write_set;
     int socket;
@@ -212,8 +234,8 @@ enum pubnub_res pbpal_check_resolv_and_connect(pubnub_t *pb)
     struct timeval timev = { 0, 300000 };
     
     if (-1 == BIO_get_fd(pb->pal.socket, &socket)) {
-        PUBNUB_LOG_ERROR("Uninitialized BIO!\n");
-        return PNR_CONNECT_FAILED;
+        PUBNUB_LOG_ERROR("pbpal_connected(): Uninitialized BIO!\n");
+        return pbpal_connect_resource_failure;
     }
     FD_ZERO(&read_set);
     FD_ZERO(&write_set);
@@ -221,13 +243,13 @@ enum pubnub_res pbpal_check_resolv_and_connect(pubnub_t *pb)
     FD_SET(socket, &write_set);
     rslt = select(socket + 1, &read_set, &write_set, NULL, &timev);
     if (SOCKET_ERROR == rslt) {
-        PUBNUB_LOG_ERROR("select() Error!\n");
-        return PNR_CONNECT_FAILED;
+        PUBNUB_LOG_ERROR("pbpal_connected(): select() Error!\n");
+        return pbpal_connect_resource_failure;
     }
     else if (rslt > 0) {
-        PUBNUB_LOG_TRACE("select() event\n");
+        PUBNUB_LOG_TRACE("pbpal_connected(): select() event\n");
         return pbpal_resolv_and_connect(pb);
     }
-    PUBNUB_LOG_TRACE("no select() events\n");
-    return PNR_IN_PROGRESS;
+    PUBNUB_LOG_TRACE("pbpal_connected(): no select() events\n");
+    return pbpal_connect_wouldblock;
 }

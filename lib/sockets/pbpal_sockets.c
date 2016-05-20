@@ -293,8 +293,12 @@ int pbpal_close(pubnub_t *pb)
     return 0;
 }
 
-
-bool pbpal_connected(pubnub_t *pb)
+void pbpal_free(pubnub_t *pb)
 {
-    return (pb->pal.socket != SOCKET_INVALID) && socket_is_connected(pb->pal.socket);
+    if (pb->pal.socket != SOCKET_INVALID) {
+        /* While this should not happen, it doesn't hurt to be paranoid.
+         */
+        pbntf_lost_socket(pb, pb->pal.socket);
+        socket_close(pb->pal.socket);
+    }
 }

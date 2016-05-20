@@ -14,6 +14,22 @@
  */
 void pbpal_init(pubnub_t *pb);
 
+/** Results that functions for (DNS) resolving and
+    connecting can return.
+*/
+enum pbpal_resolv_n_connect_result {
+    pbpal_resolv_resource_failure,
+    pbpal_resolv_failed_send,
+    pbpal_resolv_send_wouldblock,
+    pbpal_resolv_sent,
+    pbpal_resolv_failed_rcv,
+    pbpal_resolv_rcv_wouldblock,
+    pbpal_resolv_failed_processing,
+    pbpal_connect_resource_failure,
+    pbpal_connect_failed,
+    pbpal_connect_wouldblock,
+    pbpal_connect_success
+};
 
 /** Handles start of a TCP (HTTP) connection. It first handles DNS
     resolving for the context @p pb.  If DNS is already resolved, it
@@ -37,10 +53,10 @@ void pbpal_init(pubnub_t *pb);
     @return PNR_IN_PROGRESS: DNS not yet resolved, PNR_STARTED: await
     TCP connection, PNR_OK: TCP connected, other: the actual error
 */
-enum pubnub_res pbpal_resolv_and_connect(pubnub_t *pb);
+enum pbpal_resolv_n_connect_result pbpal_resolv_and_connect(pubnub_t *pb);
 
 
-enum pubnub_res pbpal_check_resolv_and_connect(pubnub_t *pb);
+enum pbpal_resolv_n_connect_result pbpal_check_resolv_and_connect(pubnub_t *pb);
 
 /** Sends data over an established connection (with the Pubnub server).
     At one time, only one sending of data can take place.
@@ -133,13 +149,19 @@ void pbpal_forget(pubnub_t *pb);
 */
 int pbpal_close(pubnub_t *pb);
 
-/** Returns whether a TCP connection has been established for the
-    given Pubnub context.
+/** Checks whether a TCP connection is established. Call after
+    starting a TCP connection (thus, after DNS resolution is over).
 */
-bool pbpal_connected(pubnub_t *pb);
+enum pbpal_resolv_n_connect_result pbpal_check_connect(pubnub_t *pb);
 
 /** Sets blocking I/O option on the context for the communication */
 int pbpal_set_blocking_io(pubnub_t *pb);
+
+/** Frees-up any resources allocated by the PAL for the given
+    context. After this call, context is not safe for use by PAL any
+    more (it is assumed it will be freed-up by the caller).
+*/
+void pbpal_free(pubnub_t *pb);
 
 
 #endif /* !defined INC_PBPAL */

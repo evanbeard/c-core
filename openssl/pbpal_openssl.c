@@ -1,6 +1,7 @@
 /* -*- c-file-style:"stroustrup"; indent-tabs-mode: nil -*- */
 #include "pbpal.h"
 
+#include "pbpal_mutex.h"
 #include "pubnub_ntf_sync.h"
 #include "pubnub_netcore.h"
 #include "pubnub_internal.h"
@@ -14,6 +15,49 @@
 
 
 #define HTTP_PORT 80
+
+
+/** Locks used by OpenSSL */
+static pbpal_mutex_t *m_locks;
+
+
+static void locking_callback(int mode, int type, const char *file, int line)
+{
+    PUBNUB_LOG_TRACE("thread=%4lu mode=%s lock=%s %s:%d\n", CRYPTO_thread_id(),
+                     (mode & CRYPTO_LOCK) ? "l" : "u",
+                     (type & CRYPTO_READ) ? "r" : "w", file, line);
+    if (mode & CRYPTO_LOCK) {
+        pbpal_mutex_lock(m_locks[type]);
+    }
+    else {
+        pbpal_mutex_unlock(m_locks[type]);
+    }
+}
+
+
+static unsigned long thread_id(void)
+{
+    return (unsigned long)pbpal_thread_id();
+}
+
+
+static int locks_setup(void)
+{
+    int i;
+    m_locks = calloc(CRYPTO_num_locks(), sizeof(pbpal_mutex_t));
+    if (NULL == m_locks) {
+        return -1;
+    }
+    for (i = 0; i < CRYPTO_num_locks(); ++i) {
+        pbpal_mutex_init_std(m_locks[i]);
+    }
+#if !defined(_WIN32)
+    // On Windows, OpenSSL has a suitable default
+    CRYPTO_set_id_callback(thread_id);
+#endif
+    CRYPTO_set_locking_callback(locking_callback);
+    return 0;
+}
 
 
 static void buf_setup(pubnub_t *pb)
@@ -31,6 +75,9 @@ static int pal_init(void)
         SSL_load_error_strings();
         SSL_library_init();
         OpenSSL_add_all_algorithms();
+        if (locks_setup()) {
+            return -1;
+        }
 
         pbntf_init();
         s_init = true;
@@ -42,8 +89,7 @@ static int pal_init(void)
 void pbpal_init(pubnub_t *pb)
 {
     pal_init();
-    pb->pal.socket = NULL;
-    pb->pal.ctx = NULL;
+    memset(&pb->pal, 0, sizeof pb->pal);
     pb->options.use_blocking_io = true;
     pb->options.useSSL = pb->options.fallbackSSL = pb->options.ignoreSSL = true;
     pb->sock_state = STATE_NONE;
@@ -296,10 +342,6 @@ int pbpal_close(pubnub_t *pb)
         pbntf_lost_socket(pb, pb->pal.socket);
         BIO_free_all(pb->pal.socket);
         pb->pal.socket = NULL;
-        if (pb->pal.ctx != NULL) {
-            SSL_CTX_free(pb->pal.ctx);
-            pb->pal.ctx = NULL;
-        }
     }
 
     PUBNUB_LOG_TRACE("pbpal_close() returning 0\n");
@@ -308,7 +350,23 @@ int pbpal_close(pubnub_t *pb)
 }
 
 
-bool pbpal_connected(pubnub_t *pb)
+void pbpal_free(pubnub_t *pb)
 {
-    return pb->pal.socket != NULL;
+    if (pb->pal.socket != NULL) {
+        /* While this should not happen, it doesn't hurt to be paranoid.
+         */
+        pbntf_lost_socket(pb, pb->pal.socket);
+        BIO_free_all(pb->pal.socket);
+    }
+
+    /* The rest, OTOH, is expected */
+    if (pb->pal.ctx != NULL) {
+        SSL_CTX_free(pb->pal.ctx);
+        if (pb->pal.session != NULL) {
+            SSL_SESSION_free(pb->pal.session);
+        }
+    }
+    else {
+        PUBNUB_ASSERT_OPT(NULL == pb->pal.session);
+    }
 }

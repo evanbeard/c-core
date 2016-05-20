@@ -28,7 +28,7 @@ static void finish(struct pubnub_ *pb)
 
     pb->core.http_reply[pb->core.http_buf_len] = '\0';
     PUBNUB_LOG_TRACE("finish('%s')\n", pb->core.http_reply);
-    
+
     switch (pb->trans) {
     case PBTT_SUBSCRIBE:
         if (pbcc_parse_subscribe_response(&pb->core) != 0) {
@@ -60,6 +60,7 @@ static void finish(struct pubnub_ *pb)
     case PBTT_WHERENOW:
     case PBTT_SET_STATE:
     case PBTT_STATE_GET:
+    case PBTT_HEARTBEAT:
         if (pbcc_parse_presence_response(&pb->core) != 0) {
             PUBNUB_LOG_WARNING("parse_presence failed\n");
             pbres = PNR_FORMAT_ERROR;
@@ -99,56 +100,86 @@ next_state:
     case PBS_NULL:
         break;
     case PBS_IDLE:
-        pbrslt = pbpal_resolv_and_connect(pb);
-        switch (pbrslt) {
-        case PNR_STARTED:
-        case PNR_IN_PROGRESS:
-        case PNR_OK:
-            switch (pbrslt) {
-            case PNR_STARTED: pb->state = PBS_WAIT_DNS; break;
-            case PNR_IN_PROGRESS: pb->state = PBS_WAIT_CONNECT; break;
-            case PNR_OK: default: pb->state = PBS_CONNECTED; break;
-            }
-            switch (pbntf_got_socket(pb, pb->pal.socket)) {
-            case 0: goto next_state;
-            case +1: break;
-            case -1: default: 
-                pb->core.last_result = PNR_CONNECT_FAILED;
-                pbntf_trans_outcome(pb);
-                break;
-            }
+    {
+        enum pbpal_resolv_n_connect_result rslv = pbpal_resolv_and_connect(pb);
+        WATCH_ENUM(rslv);
+        switch (rslv) {
+        case pbpal_resolv_send_wouldblock:
+            return 0;
+        case pbpal_resolv_sent:
+        case pbpal_resolv_rcv_wouldblock:
+            pb->state = PBS_WAIT_DNS;
+            break;
+        case pbpal_connect_wouldblock:
+            pb->state = PBS_WAIT_CONNECT;
+            break;
+        case pbpal_connect_success:
+            pb->state = PBS_CONNECTED;
             break;
         default:
-            pb->core.last_result = pbrslt;
+            pb->core.last_result = PNR_ADDR_RESOLUTION_FAILED;
             pbntf_trans_outcome(pb);
-            break;
+            return 0;
+        }
+        i = pbntf_got_socket(pb, pb->pal.socket);
+        if (0 == i) {
+            goto next_state;
+        }
+        else if (i < 0) {
+            pb->core.last_result = PNR_CONNECT_FAILED;
+            pbntf_trans_outcome(pb);
         }
         break;
+    }
     case PBS_WAIT_DNS:
-        pbrslt = pbpal_check_resolv_and_connect(pb);
-        switch (pbrslt) {
-        case PNR_STARTED:
+    {
+        enum pbpal_resolv_n_connect_result rslv = pbpal_check_resolv_and_connect(pb);
+        WATCH_ENUM(rslv);
+        switch (rslv) {
+        case pbpal_resolv_send_wouldblock:
+        case pbpal_resolv_sent:
+            pb->core.last_result = PNR_INTERNAL_ERROR;
+            pbntf_trans_outcome(pb);
             break;
-        case PNR_IN_PROGRESS:
+        case pbpal_resolv_rcv_wouldblock:
+            break;
+        case pbpal_connect_wouldblock:
             pbntf_update_socket(pb, pb->pal.socket);
             pb->state = PBS_WAIT_CONNECT;
             break;
-        case PNR_OK:
-            pbntf_update_socket(pb, pb->pal.socket);
+        case pbpal_connect_success:
             pb->state = PBS_CONNECTED;
             goto next_state;
         default:
-            pb->core.last_result = pbrslt;
+            pb->core.last_result = PNR_ADDR_RESOLUTION_FAILED;
             pbntf_trans_outcome(pb);
             break;
         }
         break;
+    }
     case PBS_WAIT_CONNECT:
-        if (pbpal_connected(pb)) {
+    {
+        enum pbpal_resolv_n_connect_result rslv = pbpal_check_connect(pb);
+        WATCH_ENUM(rslv);
+        switch (rslv) {
+        case pbpal_resolv_send_wouldblock:
+        case pbpal_resolv_sent:
+        case pbpal_resolv_rcv_wouldblock:
+            pb->core.last_result = PNR_INTERNAL_ERROR;
+            pbntf_trans_outcome(pb);
+            break;
+        case pbpal_connect_wouldblock:
+            break;
+        case pbpal_connect_success:
             pb->state = PBS_CONNECTED;
             goto next_state;
+        default:
+            pb->core.last_result = PNR_CONNECT_FAILED;
+            pbntf_trans_outcome(pb);
+            break;
         }
         break;
+    }
     case PBS_CONNECTED:
         pbpal_send_literal_str(pb, "GET ");
         pb->state = PBS_TX_GET;
@@ -289,7 +320,7 @@ next_state:
             goto next_state;
         }
         else {
-            finish(pb);       
+            finish(pb);
         }
         break;
     case PBS_RX_BODY_WAIT:
@@ -299,8 +330,8 @@ next_state:
             WATCH_UINT(len);
             WATCH_UINT(pb->core.http_buf_len);
             memcpy(
-                pb->core.http_reply + pb->core.http_buf_len, 
-                pb->core.http_buf, 
+                pb->core.http_reply + pb->core.http_buf_len,
+                pb->core.http_buf,
                 len
                 );
             pb->core.http_buf_len += len;
@@ -369,8 +400,8 @@ next_state:
                     to_copy = len;
                 }
                 memcpy(
-                    pb->core.http_reply + pb->core.http_buf_len, 
-                    pb->core.http_buf, 
+                    pb->core.http_reply + pb->core.http_buf_len,
+                    pb->core.http_buf,
                     to_copy
                     );
                 pb->core.http_buf_len += to_copy;

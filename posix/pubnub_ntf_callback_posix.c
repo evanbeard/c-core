@@ -128,7 +128,7 @@ void* socket_watcher_thread(void *arg)
         monotonic_clock_get_time(&timspec);
         timspec.tv_sec += (timspec.tv_nsec + 200*MILLI_IN_NANO) / UNIT_IN_NANO;
         timspec.tv_nsec = (timspec.tv_nsec + 200*MILLI_IN_NANO) % UNIT_IN_NANO;
-        
+
         pthread_mutex_lock(&m_watcher.mutw);
         pthread_cond_timedwait(&m_watcher.condw, &m_watcher.mutw, &timspec);
 
@@ -140,7 +140,7 @@ void* socket_watcher_thread(void *arg)
             else if (rslt > 0) {
                 size_t i;
                 for (i = 0; i < m_watcher.apoll_size; ++i) {
-                    if (m_watcher.apoll[i].revents & (m_watcher.apoll[i].events | POLLHUP)) {
+                    if (m_watcher.apoll[i].revents & (m_watcher.apoll[i].events | POLLHUP | POLLERR | POLLNVAL)) {
                         pubnub_mutex_lock(m_watcher.apb[i]->monitor);
                         pbnc_fsm(m_watcher.apb[i]);
                         if (m_watcher.apoll[i].events == POLLOUT) {
@@ -275,8 +275,15 @@ void pbntf_trans_outcome(pubnub_t *pb)
 
 enum pubnub_res pubnub_last_result(pubnub_t *pb)
 {
+    enum pubnub_res rslt;
+    
     PUBNUB_ASSERT(pb_valid_ctx_ptr(pb));
-    return pb->core.last_result;
+    
+    pubnub_mutex_lock(pb->monitor);
+    rslt = pb->core.last_result;
+    pubnub_mutex_unlock(pb->monitor);
+    
+    return rslt;
 }
 
 

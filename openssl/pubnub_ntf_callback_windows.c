@@ -65,7 +65,7 @@ static void save_socket(struct SocketWatcherData *watcher, pubnub_t *pb)
     }
 
     watcher->apoll[watcher->apoll_size].fd = sockt;
-    watcher->apoll[watcher->apoll_size].events = POLLIN | POLLOUT;
+    watcher->apoll[watcher->apoll_size].events = POLLOUT;
     watcher->apb[watcher->apoll_size] = pb;
     ++watcher->apoll_size;
 }
@@ -116,6 +116,7 @@ void socket_watcher_thread(void *arg)
     for (;;) {
         const DWORD ms = 100;
 
+        Sleep(1);
         EnterCriticalSection(&m_watcher.mutw);
         if (0 == m_watcher.apoll_size) {
             LeaveCriticalSection(&m_watcher.mutw);
@@ -129,11 +130,32 @@ void socket_watcher_thread(void *arg)
             }
             else if (rslt > 0) {
                 size_t i;
-                for (i = 0; i < m_watcher.apoll_size; ++i) {
+                size_t apoll_size = m_watcher.apoll_size;
+                for (i = 0; i < apoll_size; ++i) {
                     if (m_watcher.apoll[i].revents & (POLLIN | POLLOUT)) {
-                        pubnub_mutex_lock(m_watcher.apb[i]->monitor);
-                        pbnc_fsm(m_watcher.apb[i]);
-                        pubnub_mutex_unlock(m_watcher.apb[i]->monitor);
+                        pubnub_t *pbp = m_watcher.apb[i];
+                        pubnub_mutex_lock(pbp->monitor);
+                        pbnc_fsm(pbp);
+                        if (apoll_size == m_watcher.apoll_size) {
+                            if (m_watcher.apoll[i].events == POLLOUT) {
+                                if ((pbp->state == PBS_WAIT_DNS) ||
+                                    (pbp->state >= PBS_RX_HTTP_VER)) {
+                                    m_watcher.apoll[i].events = POLLIN;
+                                }
+                            }
+                            else {
+                                if ((pbp->state > PBS_WAIT_DNS) &&
+                                    (pbp->state < PBS_RX_HTTP_VER)) {
+                                    m_watcher.apoll[i].events = POLLOUT;
+                                }
+                            }
+                        }
+                        else {
+                            PUBNUB_ASSERT_OPT(apoll_size == m_watcher.apoll_size + 1);
+                            apoll_size = m_watcher.apoll_size;
+                            --i;
+                        }
+                        pubnub_mutex_unlock(pbp->monitor);
                     }
                 }
             }

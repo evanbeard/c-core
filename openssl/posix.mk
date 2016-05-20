@@ -1,4 +1,4 @@
-SOURCEFILES = ../core/pubnub_coreapi.c ../core/pubnub_ccore.c ../core/pubnub_netcore.c  pbpal_openssl.c pbpal_resolv_and_connect_openssl.c ../core/pubnub_alloc_std.c ../core/pubnub_assert_std.c ../core/pubnub_generate_uuid.c ../core/pubnub_blocking_io.c ../core/pubnub_timers.c ../core/pubnub_json_parse.c ../core/pubnub_helper.c pubnub_version_openssl.c ../posix/pubnub_generate_uuid_posix.c pbpal_openssl_blocking_io.c
+SOURCEFILES = ../core/pubnub_ssl.c ../core/pubnub_coreapi.c ../core/pubnub_ccore.c ../core/pubnub_netcore.c  pbpal_openssl.c pbpal_resolv_and_connect_openssl.c ../core/pubnub_alloc_std.c ../core/pubnub_assert_std.c ../core/pubnub_generate_uuid.c ../core/pubnub_blocking_io.c ../core/pubnub_timers.c ../core/pubnub_json_parse.c ../core/pubnub_helper.c pubnub_version_openssl.c ../posix/pubnub_generate_uuid_posix.c pbpal_openssl_blocking_io.c
 
 OS := $(shell uname)
 ifeq ($(OS),Darwin)
@@ -9,8 +9,9 @@ SOURCEFILES += ../posix/monotonic_clock_get_time_posix.c
 LDLIBS=-lrt -lpthread -lssl -lcrypto
 endif
 
-CFLAGS =-g -D PUBNUB_LOG_LEVEL=PUBNUB_LOG_LEVEL_TRACE -I ../core -I . -I ../posix/fntest -I ../core/fntest -Wall -D PUBNUB_THREADSAFE
+CFLAGS =-g -D PUBNUB_LOG_LEVEL=PUBNUB_LOG_LEVEL_NONE -I ../core -I . -I ../posix/fntest -I ../core/fntest -Wall -D PUBNUB_THREADSAFE
 # -g enables debugging, remove to get a smaller executable
+# -fsanitize=address Use AddressSanitizer
 
 
 all: pubnub_sync_sample cancel_subscribe_sync_sample pubnub_callback_sample subscribe_publish_callback_sample pubnub_fntest pubnub_console_sync pubnub_console_callback

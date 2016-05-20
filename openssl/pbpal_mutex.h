@@ -26,6 +26,8 @@ __inline int pubnub_InitCriticalSection(_Out_ LPCRITICAL_SECTION lpCS) {
 #define pbpal_mutex_static_decl_and_init(m) static CRITICAL_SECTION m; static volatile LONG m_init_##m
 
 #define pbpal_mutex_init_static(m) do { if (0 == InterlockedExchange(&m_init_##m, 1)) InitializeCriticalSection(&m); } while(0)
+#define pbpal_thread_id() DONT_CALL_ME_ON_WINDOWS_
+#define pbpal_mutex_init_std(m) InitializeCriticalSection(&(m))
 
 #else
 
@@ -45,6 +47,8 @@ typedef pthread_mutex_t pbpal_mutex_t;
 #define pbpal_mutex_decl_and_init(m) pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER
 #define pbpal_mutex_static_decl_and_init(m) static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER
 #define pbpal_mutex_init_static(m)
+#define pbpal_thread_id() pthread_self()
+#define pbpal_mutex_init_std(m)  pthread_mutex_init(&(m), NULL)
 
 #endif /* defined(_WIN32) */
 
